@@ -157,7 +157,7 @@ macro impl*(clazz: untyped, iface: typed, body: untyped) =
     def[6].expectKind nnkStmtList
     var xbody = newStmtList()
     xbody.add quote do:
-      let `selfname` = cast[ref `clazz`](`selfname`)
+      let `selfname` {.used.} = cast[ref `clazz`](`selfname`)
     for item in def[6]:
       xbody.add item
     var dlam = nnkLambda.newTree(
