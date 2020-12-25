@@ -1,6 +1,6 @@
 # Package
 
-version       = "0.1.0"
+version       = "0.1.1"
 author        = "CodeHz"
 description   = "Vtable for nim"
 license       = "LGPL-3.0"

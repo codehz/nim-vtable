@@ -55,8 +55,8 @@ macro trait*(name: untyped, body: untyped) =
     vtmdfp[1][1][0].expectIdent namestr
     vtmdfp[1][1][0] = bindSym "RootObj"
     vtmd.add vtmdfp
-    if it[3].kind == nnkPragma:
-      vtmd.add it[3].copy()
+    if it[4].kind == nnkPragma:
+      vtmd.add it[4].copy()
     else:
       vtmd.add nnkPragma.newTree ident "nimcall"
     vtm.add vtmd
@@ -165,7 +165,7 @@ macro impl*(clazz: untyped, iface: typed, body: untyped) =
       newEmptyNode(),
       newEmptyNode(),
       params,
-      newEmptyNode(),
+      def[4].copy(),
       newEmptyNode(),
       xbody
     )
