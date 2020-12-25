@@ -114,9 +114,15 @@ macro trait*(name: untyped, body: untyped) =
   result.add typesec
   result.add defs
 
-proc vtType(impl: NimNode): NimNode {.compileTime.} =
-  if impl.kind == nnkBracketExpr:
-    return vtType impl[1].getTypeImpl()
+proc resolveTypeDesc(T: NimNode): NimNode =
+  let impl = getTypeImpl T
+  assert impl.kind == nnkBracketExpr
+  impl[0].expectKind nnkSym
+  assert impl[0].strVal == "typeDesc"
+  impl[1]
+
+proc vtType(T: NimNode): NimNode {.compileTime.} =
+  let impl = getTypeImpl resolveTypeDesc T
   impl.expectKind nnkObjectTy
   return impl[2][0][1][0]
 
@@ -129,13 +135,11 @@ proc vtDefinition(impl: NimNode): OrderedTable[string, tuple[sym, def: NimNode]]
     item[1].expectKind nnkProcTy
     result[item[0].strVal] = (sym: item[0], def: item[1])
 
-macro impl*(clazz: untyped, iface: typed, body: untyped) =
-  clazz.expectKind nnkIdent
-  body.expectKind nnkStmtList
+proc implRefObject(clazz, iface, body: NimNode): NimNode =
   let namestr = clazz.strVal
   let impl_id = ident "impl" & iface.strVal & "For" & namestr
   let cvt_id = ident "to" & iface.strVal
-  let ifaceT = iface.getTypeImpl().vtType()
+  let ifaceT = iface.vtType()
   var defs = ifaceT.getTypeImpl().vtDefinition
 
   result = newStmtList()
@@ -183,3 +187,16 @@ macro impl*(clazz: untyped, iface: typed, body: untyped) =
       new result
       result[].vtbl = addr `impl_id`
       result[].raw = self
+
+macro impl*(clazz: typed, iface: typed, body: untyped) =
+  clazz.expectKind nnkSym
+  iface.expectKind nnkSym
+  body.expectKind nnkStmtList
+  let clazztype = clazz.resolveTypeDesc().getType()
+  echo treeRepr clazztype
+  if clazztype.kind == nnkObjectTy:
+    if clazztype[1] != bindSym "RootObj":
+      error "require inherited with RootObj"
+    return implRefObject(clazz, iface, body)
+  else:
+    error "Invalid class type: " & $clazztype.kind
