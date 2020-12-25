@@ -1,5 +1,6 @@
-{.experimental: "dynamicBindSym".}
-import macros, tables, strutils
+import macros, tables, strutils, options
+
+export isSome, get, some
 
 type Interface*[VT] = object
   vtbl*: ptr VT
@@ -42,6 +43,7 @@ macro trait*(name: untyped, body: untyped) =
   for it in body:
     it.expectKind nnkMethodDef
     it[2].expectKind nnkEmpty
+    let hasDefault = it[6].kind == nnkStmtList
     let mid = it[0].identInfo
     var vtm = newNimNode nnkIdentDefs
     vtm.add ident mid.value
@@ -59,11 +61,18 @@ macro trait*(name: untyped, body: untyped) =
       vtmd.add it[4].copy()
     else:
       vtmd.add nnkPragma.newTree ident "nimcall"
-    vtm.add vtmd
+    if hasDefault:
+      vtm.add nnkBracketExpr.newTree(
+        bindSym "Option",
+        vtmd
+      )
+    else:
+      vtm.add vtmd
     vtm.add newEmptyNode()
     vtds.add vtm
 
     let vfp = it[3].copy()
+    let origself = vfp[1][0]
     vfp[1][0] = selfsym
     var vfn = nnkProcDef.newTree(
       it[0],
@@ -73,23 +82,40 @@ macro trait*(name: untyped, body: untyped) =
       newEmptyNode(),
       newEmptyNode(),
     )
-    var vfnbody = newStmtList()
-    var vfnbodycall = newNimNode nnkCall
-    vfnbodycall.add nnkDotExpr.newTree(
-      nnkDotExpr.newTree(
-        selfsym,
-        ident "vtbl"
-      ),
-      ident mid.value
-    )
-    vfnbodycall.add nnkDotExpr.newTree(
-      selfsym,
-      ident "raw"
-    )
-    for param in vtmdfp[2..^1].paramNames:
-      vfnbodycall.add param
-    vfnbody.add vfnbodycall
-    vfn.add vfnbody
+    let basechain = newDotExpr(newDotExpr(selfsym, ident "vtbl"), ident mid.value)
+    if hasDefault:
+      var vfnbodycall = newNimNode nnkCall
+      vfnbodycall.add newCall(
+        newDotExpr(
+          basechain,
+          bindSym "get"
+        ),
+      )
+      vfnbodycall.add newDotExpr(selfsym, ident "raw")
+      for param in vtmdfp[2..^1].paramNames:
+        vfnbodycall.add param
+      var velbody = newStmtList()
+      velbody.add newLetStmt(origself, selfsym)
+      velbody.add it[6]
+      vfn.add nnkIfStmt.newTree(
+        nnkElifBranch.newTree(
+          newCall(
+            newDotExpr(
+              basechain,
+              bindSym "isSome"
+            )
+          ),
+          newStmtList(vfnbodycall)
+        ),
+        nnkElse.newTree(velbody)
+      )
+    else:
+      var vfnbodycall = newNimNode nnkCall
+      vfnbodycall.add basechain
+      vfnbodycall.add newDotExpr(selfsym, ident "raw")
+      for param in vtmdfp[2..^1].paramNames:
+        vfnbodycall.add param
+      vfn.add newStmtList(vfnbodycall)
     defs.add vfn
   typesec.add nnkTypeDef.newTree(
     nnkPragmaExpr.newTree(
@@ -126,14 +152,13 @@ proc vtType(T: NimNode): NimNode {.compileTime.} =
   impl.expectKind nnkObjectTy
   return impl[2][0][1][0]
 
-proc vtDefinition(impl: NimNode): OrderedTable[string, tuple[sym, def: NimNode]] {.compileTime.} =
+proc vtDefinition(impl: NimNode): OrderedTable[string, tuple[sym: NimNode, optional: bool]] {.compileTime.} =
   impl.expectKind nnkObjectTy
   for item in impl[2]:
     item.expectKind nnkIdentDefs
     item.expectLen 3
     item[0].expectKind nnkSym
-    item[1].expectKind nnkProcTy
-    result[item[0].strVal] = (sym: item[0], def: item[1])
+    result[item[0].strVal] = (sym: item[0], optional: (item[1].kind == nnkBracketExpr))
 
 proc implRefObject(clazz, iface, body: NimNode): NimNode =
   let namestr = clazz.strVal
@@ -149,7 +174,8 @@ proc implRefObject(clazz, iface, body: NimNode): NimNode =
   for def in body:
     def.expectKind nnkMethodDef
     let name = def[0].identInfo.value
-    let defsym = defs[name].sym
+    let origdef = defs[name]
+    let defsym = origdef.sym
     var params = def[3].copy()
     params.expectMinLen 2
     params[1].expectLen 3
@@ -173,14 +199,22 @@ proc implRefObject(clazz, iface, body: NimNode): NimNode =
       newEmptyNode(),
       xbody
     )
-    staticblock.add quote do:
-      `impl_id`.`defsym` = `dlam`
+    if origdef.optional:
+      staticblock.add quote do:
+        `impl_id`.`defsym` = some `dlam`
+    else:
+      staticblock.add quote do:
+        `impl_id`.`defsym` = `dlam`
     defs.del name
   if defs.len != 0:
     var s = "some function not defined in impl block: \n"
+    var hasmand = false
     for k, v in defs:
-      s &= "undefined reference to $1: $2\n".format(k, v.def.repr)
-    error s.strip()
+      if not v.optional:
+        hasmand = true
+        s &= "undefined reference to $1\n".format(k)
+    if hasmand:
+      error s.strip()
   result.add quote do:
     `staticblock`
     converter `cvt_id`*(self: ref `clazz`): ref `iface` =
@@ -193,7 +227,6 @@ macro impl*(clazz: typed, iface: typed, body: untyped) =
   iface.expectKind nnkSym
   body.expectKind nnkStmtList
   let clazztype = clazz.resolveTypeDesc().getType()
-  echo treeRepr clazztype
   if clazztype.kind == nnkObjectTy:
     if clazztype[1] != bindSym "RootObj":
       error "require inherited with RootObj"
