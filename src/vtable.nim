@@ -95,7 +95,10 @@ macro trait*(name: untyped, body: untyped) =
       for param in vtmdfp[2..^1].paramNames:
         vfnbodycall.add param
       var velbody = newStmtList()
-      velbody.add newLetStmt(origself, selfsym)
+      velbody.add newLetStmt(nnkPragmaExpr.newTree(
+        origself,
+        nnkPragmaExpr.newTree(ident "used")
+      ), selfsym)
       velbody.add it[6]
       vfn.add nnkIfStmt.newTree(
         nnkElifBranch.newTree(
