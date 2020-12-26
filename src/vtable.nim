@@ -92,7 +92,7 @@ proc replaceAllSymbol(source: NimNode, sym: string, target: NimNode) =
       # fix for typechecked node
       let tmp = nnkBracketExpr.newNimNode()
       for sub in child:
-        if sub.strVal == sym: tmp.add target
+        if sub.kind == nnkSym and sub.strVal == sym: tmp.add target
         else: tmp.add sub
       source[idx] = tmp
     of nnkSym:
@@ -353,3 +353,4 @@ macro impl*(clazz: typed{nkSym | nkBracketExpr}, iface: typed{nkSym | nkBracketE
     for param in combinedparams:
       let gen = ident param[0].strVal & "`gen"
       result.replaceAllSymbol param[0].strVal, gen
+  echo result.repr
