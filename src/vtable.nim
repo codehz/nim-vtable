@@ -50,12 +50,45 @@ proc definedIdentInfo(node: NimNode): tuple[value: string, exported: bool] =
   else:
     error "invalid ident node"
 
-iterator paramNames(arr: openarray[NimNode]): NimNode =
+iterator mapParams(arr: openarray[NimNode]): tuple[name, desc: NimNode] =
   for item in arr:
     item.expectKind nnkIdentDefs
     for name in item[0..^3]:
       name.expectKind nnkIdent
-      yield name
+      yield (name: name, desc: item[^2])
+
+proc replaceAllIdent(source: NimNode, id: string, target: NimNode) =
+  for idx, child in source:
+    if child.kind == nnkIdent:
+      if child.strVal == id:
+        source[idx] = target
+    else:
+      child.replaceAllIdent id, target
+
+macro forall*(body: untyped) =
+  body.expectKind nnkDo
+  body[0].expectKind nnkEmpty
+  body[1].expectKind nnkEmpty
+  body[2].expectKind nnkEmpty
+  body[3].expectKind nnkFormalParams
+  body[3][0].expectKind nnkEmpty
+  body[4].expectKind nnkEmpty
+  body[5].expectKind nnkEmpty
+  body[6].expectKind nnkStmtList
+  result = newStmtList()
+  let typesec = nnkTypeSection.newNimNode()
+  let xbody = body[6].copy()
+  for def in body[3][1..^1].mapParams():
+    let tmp = genSym(nskType, def.name.strVal)
+    replaceAllIdent(xbody, def.name.strVal, tmp)
+    typesec.add nnkTypeDef.newTree(
+      tmp,
+      newEmptyNode(),
+      def.desc
+    )
+  result.add typesec
+  result.add xbody
+  echo repr result
 
 macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) =
   let nameidinfo = parseInputIdentInfo(name)
@@ -117,8 +150,8 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
         ),
       )
       vfnbodycall.add newDotExpr(selfsym, ident "raw")
-      for param in vtmdfp[2..^1].paramNames:
-        vfnbodycall.add param
+      for param in vtmdfp[2..^1].mapParams:
+        vfnbodycall.add param.name
       var velbody = it[6].copy()
       vfn.add nnkIfStmt.newTree(
         nnkElifBranch.newTree(
@@ -136,8 +169,8 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
       var vfnbodycall = newNimNode nnkCall
       vfnbodycall.add basechain
       vfnbodycall.add newDotExpr(selfsym, ident "raw")
-      for param in vtmdfp[2..^1].paramNames:
-        vfnbodycall.add param
+      for param in vtmdfp[2..^1].mapParams:
+        vfnbodycall.add param.name
       vfn.add newStmtList(vfnbodycall)
     defs.add vfn
   typesec.add nnkTypeDef.newTree(
