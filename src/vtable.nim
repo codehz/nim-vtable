@@ -224,9 +224,10 @@ proc implRefObject(clazz, iface, body: NimNode): NimNode =
   var defs = ifaceT.getTypeImpl().vtDefinition
 
   result = newStmtList()
-  result.add quote do:
-    var `impl_id`: `ifaceT`
-  var staticblock = newStmtList()
+  let fblock = newStmtList()
+  fblock.add quote do:
+    var `impl_id` {.global.}: `ifaceT`
+  let onceblock = newStmtList()
   for def in body:
     def.expectKind nnkMethodDef
     let name = def[0].definedIdentInfo.value
@@ -256,10 +257,10 @@ proc implRefObject(clazz, iface, body: NimNode): NimNode =
       xbody
     )
     if origdef.optional:
-      staticblock.add quote do:
+      onceblock.add quote do:
         `impl_id`.`defsym` = some `dlam`
     else:
-      staticblock.add quote do:
+      onceblock.add quote do:
         `impl_id`.`defsym` = `dlam`
     defs.del name
   if defs.len != 0:
@@ -271,9 +272,12 @@ proc implRefObject(clazz, iface, body: NimNode): NimNode =
         s &= "undefined reference to $1\n".format(k)
     if hasmand:
       error s.strip()
+  fblock.add quote do:
+    once:
+      `onceblock`
   result.add quote do:
-    `staticblock`
     converter `cvt_id`*(self: ref `clazz`): ref `iface` =
+      `fblock`
       new result
       result[].vtbl = addr `impl_id`
       result[].raw = self
