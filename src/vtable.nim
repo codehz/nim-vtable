@@ -1,6 +1,10 @@
-import macros, tables, options
+import macros, tables, options, strutils
 import vtable/utils
 export isSome, get, some
+
+type Interface*[VT] = object
+  vtbl*: ptr VT
+  raw*: ref RootObj
 
 macro forall*(body: untyped) =
   body.expectKind nnkDo
@@ -221,4 +225,3 @@ macro impl*(clazz: typed{nkSym | nkBracketExpr}, iface: typed{nkSym | nkBracketE
     for param in combinedparams:
       let gen = ident param[0].strVal & "`gen"
       result.replaceAllSymbol param[0].strVal, gen
-  echo result.repr
