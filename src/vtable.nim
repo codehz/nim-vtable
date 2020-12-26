@@ -1,6 +1,13 @@
-import macros, tables, strutils, options
+import macros, tables, strutils, options, sequtils
 
 export isSome, get, some
+
+proc resolveTypeDesc(T: NimNode): NimNode =
+  let impl = getTypeImpl T
+  assert impl.kind == nnkBracketExpr
+  impl[0].expectKind nnkSym
+  assert impl[0].strVal == "typeDesc"
+  impl[1]
 
 type Interface*[VT] = object
   vtbl*: ptr VT
@@ -15,11 +22,11 @@ proc `==`(a, b: InputIdentInfo): bool =
   # FIXME: compare deeper
   return true
 
-proc generateGenericParams(info: InputIdentInfo): NimNode =
-  if info.params.len == 0:
+proc generateGenericParams(params: seq[NimNode]): NimNode =
+  if params.len == 0:
     return newEmptyNode()
   result = nnkGenericParams.newNimNode()
-  for param in info.params:
+  for param in params:
     param.expectKind nnkExprColonExpr
     result.add nnkIdentDefs.newTree(
       param[0],
@@ -27,17 +34,30 @@ proc generateGenericParams(info: InputIdentInfo): NimNode =
       newEmptyNode()
     )
 
-proc generateGenericBracket(info: InputIdentInfo, id: NimNode): NimNode =
-  if info.params.len == 0: return id
+proc generateGenericBracket(params: seq[NimNode], id: NimNode): NimNode =
+  if params.len == 0: return id
   result = nnkBracketExpr.newNimNode()
   result.add id
-  for param in info.params:
+  for param in params:
     result.add param[0]
 
 proc parseInputIdentInfo(node: NimNode): InputIdentInfo =
   case node.kind:
   of nnkIdent: return InputIdentInfo(name: node.strVal, params: @[])
   of nnkBracketExpr: return InputIdentInfo(name: node[0].strVal, params: node[1..^1])
+  else: error "invalid ident node"
+
+proc parseFromTypedIdentInfo(node: NimNode): InputIdentInfo =
+  case node.kind:
+  of nnkSym: return InputIdentInfo(name: node.strVal, params: @[])
+  of nnkBracketExpr:
+    var params = newSeq[NimNode]()
+    for it in node[1..^1]:
+      params.add nnkExprColonExpr.newTree(
+        it,
+        it.resolveTypeDesc.getType
+      )
+    return InputIdentInfo(name: node[0].strVal, params: params)
   else: error "invalid ident node"
 
 proc definedIdentInfo(node: NimNode): tuple[value: string, exported: bool] =
@@ -65,6 +85,22 @@ proc replaceAllIdent(source: NimNode, id: string, target: NimNode) =
     else:
       child.replaceAllIdent id, target
 
+proc replaceAllSymbol(source: NimNode, sym: NimNode, target: NimNode) =
+  for idx, child in source:
+    case child.kind:
+    of nnkBracketExpr:
+      # fix for typechecked node
+      let tmp = nnkBracketExpr.newNimNode()
+      for sub in child:
+        if sub == sym: tmp.add target
+        else: tmp.add sub
+      source[idx] = tmp
+    of nnkSym:
+      if child == sym:
+        source[idx] = target
+    else:
+      child.replaceAllSymbol sym, target
+
 macro forall*(body: untyped) =
   body.expectKind nnkDo
   body[0].expectKind nnkEmpty
@@ -88,7 +124,6 @@ macro forall*(body: untyped) =
     )
   result.add typesec
   result.add xbody
-  echo repr result
 
 macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) =
   let nameidinfo = parseInputIdentInfo(name)
@@ -96,7 +131,7 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
   result = newStmtList()
   var typesec = newNimNode nnkTypeSection
   let namestr = nameidinfo.name
-  let namegen = nameidinfo.generateGenericParams
+  let namegen = nameidinfo.params.generateGenericParams
   let vt_id = ident "vt" & namestr
   var vtds = newNimNode nnkRecList
   var defs = newSeq[NimNode]()
@@ -190,18 +225,11 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
     namegen,
     nnkBracketExpr.newTree(
       bindSym "Interface",
-      nameidinfo.generateGenericBracket vt_id
+      nameidinfo.params.generateGenericBracket vt_id
     )
   )
   result.add typesec
   result.add defs
-
-proc resolveTypeDesc(T: NimNode): NimNode =
-  let impl = getTypeImpl T
-  assert impl.kind == nnkBracketExpr
-  impl[0].expectKind nnkSym
-  assert impl[0].strVal == "typeDesc"
-  impl[1]
 
 proc vtType(T: NimNode): NimNode {.compileTime.} =
   let impl = getTypeImpl resolveTypeDesc T
@@ -216,14 +244,16 @@ proc vtDefinition(impl: NimNode): OrderedTable[string, tuple[sym: NimNode, optio
     item[0].expectKind nnkSym
     result[item[0].strVal] = (sym: item[0], optional: (item[1].kind == nnkBracketExpr))
 
-proc implRefObject(clazz, iface, body: NimNode): NimNode =
-  let namestr = clazz.strVal
-  let impl_id = ident "impl" & iface.strVal & "For" & namestr
-  let cvt_id = ident "to" & iface.strVal
+macro impl*(clazz: typed{nkSym | nkBracketExpr}, iface: typed{nkSym | nkBracketExpr}, body: untyped{nkStmtList}) =
+  let clazzinfo = clazz.parseFromTypedIdentInfo
+  let ifaceinfo = iface.parseFromTypedIdentInfo
+  let namestr = clazzinfo.name
+  let impl_id = ident "impl" & ifaceinfo.name & "For" & namestr
+  let cvt_id = ident "to" & ifaceinfo.name
+  let combinedparams = concat(ifaceinfo.params, clazzinfo.params)
   let ifaceT = iface.vtType()
   var defs = ifaceT.getTypeImpl().vtDefinition
 
-  result = newStmtList()
   let fblock = newStmtList()
   fblock.add quote do:
     var `impl_id` {.global.}: `ifaceT`
@@ -275,21 +305,31 @@ proc implRefObject(clazz, iface, body: NimNode): NimNode =
   fblock.add quote do:
     once:
       `onceblock`
+  let retype = if ifaceinfo.params.len == 0: nnkConverterDef else: nnkProcDef
+  result = retype.newTree(
+    nnkPostfix.newTree(
+      ident "*",
+      cvt_id
+    ),
+    newEmptyNode(),
+    combinedparams.generateGenericParams(),
+    nnkFormalParams.newTree(
+      nnkRefTy.newTree(iface),
+      nnkIdentDefs.newTree(
+        ident "self",
+        nnkRefTy.newTree(clazz),
+        newEmptyNode()
+      )
+    ),
+    newEmptyNode(),
+    newEmptyNode()
+  )
   result.add quote do:
-    converter `cvt_id`*(self: ref `clazz`): ref `iface` =
-      `fblock`
-      new result
-      result[].vtbl = addr `impl_id`
-      result[].raw = self
-
-macro impl*(clazz: typed{type}, iface: typed{type}, body: untyped{nkStmtList}) =
-  clazz.expectKind nnkSym
-  iface.expectKind nnkSym
-  body.expectKind nnkStmtList
-  let clazztype = clazz.resolveTypeDesc().getType()
-  if clazztype.kind == nnkObjectTy:
-    if clazztype[1] != bindSym "RootObj":
-      error "require inherited with RootObj"
-    return implRefObject(clazz, iface, body)
-  else:
-    error "Invalid class type: " & $clazztype.kind
+    `fblock`
+    new result
+    result[].vtbl = addr `impl_id`
+    result[].raw = self
+  if combinedparams.len != 0:
+    for param in combinedparams:
+      let gen = ident param[0].strVal & "`gen"
+      result.replaceAllSymbol param[0], gen
