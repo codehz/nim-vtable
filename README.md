@@ -1,9 +1,17 @@
-Simple vtable for nim
+vtable for nim
 ======
 
-DOCS: WIP
+Why choose vtable?
+------
 
-example usage:
+Nim's dynamic dispatch cannot work across dynamic link libraries.
+
+DOCS
+------
+
+Working in progress.
+
+Example usage:
 
 ```nim
 trait MyInterface:
