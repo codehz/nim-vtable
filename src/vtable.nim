@@ -57,7 +57,7 @@ iterator paramNames(arr: openarray[NimNode]): NimNode =
       name.expectKind nnkIdent
       yield name
 
-macro trait*(name: untyped, body: untyped) =
+macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) =
   let nameidinfo = parseInputIdentInfo(name)
   body.expectKind nnkStmtList
   result = newStmtList()
@@ -245,7 +245,7 @@ proc implRefObject(clazz, iface, body: NimNode): NimNode =
       result[].vtbl = addr `impl_id`
       result[].raw = self
 
-macro impl*(clazz: typed, iface: typed, body: untyped) =
+macro impl*(clazz: typed{type}, iface: typed{type}, body: untyped{nkStmtList}) =
   clazz.expectKind nnkSym
   iface.expectKind nnkSym
   body.expectKind nnkStmtList
