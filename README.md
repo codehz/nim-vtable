@@ -6,6 +6,15 @@ Why choose vtable?
 
 Nim's dynamic dispatch cannot work across dynamic link libraries.
 
+Features
+------
+
+1. Define vtable in few lines!
+2. Use it as normal ref object!
+3. Can survival across dynlib!
+4. Type safe!
+5. Support nim's generic!
+
 DOCS
 ------
 
