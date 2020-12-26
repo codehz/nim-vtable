@@ -1,5 +1,4 @@
-import macros, tables, strutils, options, sequtils
-
+import macros, tables, strutils, options
 export isSome, get, some
 
 proc resolveTypeDesc(T: NimNode): NimNode =
@@ -62,11 +61,12 @@ proc parseFromTypedIdentInfo(node: NimNode): InputIdentInfo =
 
 proc definedIdentInfo(node: NimNode): tuple[value: string, exported: bool] =
   case node.kind:
+  of nnkAccQuoted: return (value: node[0].strVal, exported: false)
   of nnkIdent: return (value: node.strVal, exported: false)
   of nnkPostfix:
     node[0].expectIdent "*"
-    node[1].expectKind nnkIdent
-    return (value: node[1].strVal, exported: true)
+    result = definedIdentInfo(node[1])
+    result.exported = true
   else:
     error "invalid ident node"
 
@@ -85,18 +85,18 @@ proc replaceAllIdent(source: NimNode, id: string, target: NimNode) =
     else:
       child.replaceAllIdent id, target
 
-proc replaceAllSymbol(source: NimNode, sym: NimNode, target: NimNode) =
+proc replaceAllSymbol(source: NimNode, sym: string, target: NimNode) =
   for idx, child in source:
     case child.kind:
     of nnkBracketExpr:
       # fix for typechecked node
       let tmp = nnkBracketExpr.newNimNode()
       for sub in child:
-        if sub == sym: tmp.add target
+        if sub.strVal == sym: tmp.add target
         else: tmp.add sub
       source[idx] = tmp
     of nnkSym:
-      if child == sym:
+      if child.strVal == sym:
         source[idx] = target
     else:
       child.replaceAllSymbol sym, target
@@ -244,13 +244,33 @@ proc vtDefinition(impl: NimNode): OrderedTable[string, tuple[sym: NimNode, optio
     item[0].expectKind nnkSym
     result[item[0].strVal] = (sym: item[0], optional: (item[1].kind == nnkBracketExpr))
 
+proc concatParams(a, b: seq[NimNode]): seq[NimNode] =
+  result = newSeq[NimNode]()
+  for it in a:
+    result.add it
+  for it in b:
+    var matched = false
+    for oth in a:
+      if oth[0] == it[0]:
+        matched = true
+        break
+    if matched: break
+    result.add it
+
+proc `==`(a, b: seq[NimNode]): bool =
+  if a.len != b.len: return false
+  for i in 0..<a.len:
+    if a[i][0] != b[i][0]:
+      return false
+  return true
+
 macro impl*(clazz: typed{nkSym | nkBracketExpr}, iface: typed{nkSym | nkBracketExpr}, body: untyped{nkStmtList}) =
   let clazzinfo = clazz.parseFromTypedIdentInfo
   let ifaceinfo = iface.parseFromTypedIdentInfo
   let namestr = clazzinfo.name
   let impl_id = ident "impl" & ifaceinfo.name & "For" & namestr
   let cvt_id = ident "to" & ifaceinfo.name
-  let combinedparams = concat(ifaceinfo.params, clazzinfo.params)
+  let combinedparams = concatParams(ifaceinfo.params, clazzinfo.params)
   let ifaceT = iface.vtType()
   var defs = ifaceT.getTypeImpl().vtDefinition
 
@@ -268,7 +288,7 @@ macro impl*(clazz: typed{nkSym | nkBracketExpr}, iface: typed{nkSym | nkBracketE
     params[1].expectLen 3
     params[1][1].expectKind nnkRefTy
     params[1][2].expectKind nnkEmpty
-    params[1][1][0].expectIdent namestr
+    assert params[1][1][0].parseInputIdentInfo == clazzinfo
     params[1][1][0] = bindSym "RootObj"
     let selfname = params[1][0]
     def[6].expectKind nnkStmtList
@@ -305,7 +325,7 @@ macro impl*(clazz: typed{nkSym | nkBracketExpr}, iface: typed{nkSym | nkBracketE
   fblock.add quote do:
     once:
       `onceblock`
-  let retype = if ifaceinfo.params.len == 0: nnkConverterDef else: nnkProcDef
+  let retype = if ifaceinfo.params.len == 0 or ifaceinfo.params == clazzinfo.params: nnkConverterDef else: nnkProcDef
   result = retype.newTree(
     nnkPostfix.newTree(
       ident "*",
@@ -332,4 +352,4 @@ macro impl*(clazz: typed{nkSym | nkBracketExpr}, iface: typed{nkSym | nkBracketE
   if combinedparams.len != 0:
     for param in combinedparams:
       let gen = ident param[0].strVal & "`gen"
-      result.replaceAllSymbol param[0], gen
+      result.replaceAllSymbol param[0].strVal, gen
