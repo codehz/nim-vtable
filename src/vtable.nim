@@ -6,7 +6,41 @@ type Interface*[VT] = object
   vtbl*: ptr VT
   raw*: ref RootObj
 
-proc identInfo*(node: NimNode): tuple[value: string, exported: bool] =
+type InputIdentInfo = object
+  name: string
+  params: seq[NimNode]
+
+proc `==`(a, b: InputIdentInfo): bool =
+  if a.name != b.name: return false
+  # FIXME: compare deeper
+  return true
+
+proc generateGenericParams(info: InputIdentInfo): NimNode =
+  if info.params.len == 0:
+    return newEmptyNode()
+  result = nnkGenericParams.newNimNode()
+  for param in info.params:
+    param.expectKind nnkExprColonExpr
+    result.add nnkIdentDefs.newTree(
+      param[0],
+      param[1],
+      newEmptyNode()
+    )
+
+proc generateGenericBracket(info: InputIdentInfo, id: NimNode): NimNode =
+  if info.params.len == 0: return id
+  result = nnkBracketExpr.newNimNode()
+  result.add id
+  for param in info.params:
+    result.add param[0]
+
+proc parseInputIdentInfo(node: NimNode): InputIdentInfo =
+  case node.kind:
+  of nnkIdent: return InputIdentInfo(name: node.strVal, params: @[])
+  of nnkBracketExpr: return InputIdentInfo(name: node[0].strVal, params: node[1..^1])
+  else: error "invalid ident node"
+
+proc definedIdentInfo(node: NimNode): tuple[value: string, exported: bool] =
   case node.kind:
   of nnkIdent: return (value: node.strVal, exported: false)
   of nnkPostfix:
@@ -16,14 +50,6 @@ proc identInfo*(node: NimNode): tuple[value: string, exported: bool] =
   else:
     error "invalid ident node"
 
-proc fromIdentInfo*(value: string, exported: bool): NimNode =
-  result = ident value
-  if exported:
-    result = nnkPostfix.newTree(
-      ident "*",
-      result
-    )
-
 iterator paramNames(arr: openarray[NimNode]): NimNode =
   for item in arr:
     item.expectKind nnkIdentDefs
@@ -32,11 +58,12 @@ iterator paramNames(arr: openarray[NimNode]): NimNode =
       yield name
 
 macro trait*(name: untyped, body: untyped) =
-  name.expectKind nnkIdent
+  let nameidinfo = parseInputIdentInfo(name)
   body.expectKind nnkStmtList
   result = newStmtList()
   var typesec = newNimNode nnkTypeSection
-  let namestr = name.strVal
+  let namestr = nameidinfo.name
+  let namegen = nameidinfo.generateGenericParams
   let vt_id = ident "vt" & namestr
   var vtds = newNimNode nnkRecList
   var defs = newSeq[NimNode]()
@@ -44,17 +71,16 @@ macro trait*(name: untyped, body: untyped) =
     it.expectKind nnkMethodDef
     it[2].expectKind nnkEmpty
     let hasDefault = it[6].kind == nnkStmtList
-    let mid = it[0].identInfo
+    let mid = it[0].definedIdentInfo
     var vtm = newNimNode nnkIdentDefs
     vtm.add ident mid.value
     var vtmd = newNimNode nnkProcTy
     let vtmdfp = it[3].copy()
     vtmdfp.expectMinLen 2
-    let selfsym = genSym(nskParam, "self")
     vtmdfp[1].expectLen 3
     vtmdfp[1][1].expectKind nnkRefTy
     vtmdfp[1][2].expectKind nnkEmpty
-    vtmdfp[1][1][0].expectIdent namestr
+    assert vtmdfp[1][1][0].parseInputIdentInfo == name.parseInputIdentInfo
     vtmdfp[1][1][0] = bindSym "RootObj"
     vtmd.add vtmdfp
     if it[4].kind == nnkPragma:
@@ -72,12 +98,11 @@ macro trait*(name: untyped, body: untyped) =
     vtds.add vtm
 
     let vfp = it[3].copy()
-    let origself = vfp[1][0]
-    vfp[1][0] = selfsym
+    let selfsym = vfp[1][0]
     var vfn = nnkProcDef.newTree(
       it[0],
       newEmptyNode(),
-      newEmptyNode(),
+      namegen,
       vfp,
       newEmptyNode(),
       newEmptyNode(),
@@ -94,12 +119,7 @@ macro trait*(name: untyped, body: untyped) =
       vfnbodycall.add newDotExpr(selfsym, ident "raw")
       for param in vtmdfp[2..^1].paramNames:
         vfnbodycall.add param
-      var velbody = newStmtList()
-      velbody.add newLetStmt(nnkPragmaExpr.newTree(
-        origself,
-        nnkPragmaExpr.newTree(ident "used")
-      ), selfsym)
-      velbody.add it[6]
+      var velbody = it[6].copy()
       vfn.add nnkIfStmt.newTree(
         nnkElifBranch.newTree(
           newCall(
@@ -125,7 +145,7 @@ macro trait*(name: untyped, body: untyped) =
       vt_id,
       nnkPragma.newTree(ident "pure")
     ),
-    newEmptyNode(),
+    namegen,
     nnkObjectTy.newTree(
       newEmptyNode(),
       newEmptyNode(),
@@ -133,11 +153,11 @@ macro trait*(name: untyped, body: untyped) =
     )
   )
   typesec.add nnkTypeDef.newTree(
-    name,
-    newEmptyNode(),
+    ident namestr,
+    namegen,
     nnkBracketExpr.newTree(
       bindSym "Interface",
-      vt_id
+      nameidinfo.generateGenericBracket vt_id
     )
   )
   result.add typesec
@@ -176,7 +196,7 @@ proc implRefObject(clazz, iface, body: NimNode): NimNode =
   var staticblock = newStmtList()
   for def in body:
     def.expectKind nnkMethodDef
-    let name = def[0].identInfo.value
+    let name = def[0].definedIdentInfo.value
     let origdef = defs[name]
     let defsym = origdef.sym
     var params = def[3].copy()
