@@ -9,6 +9,7 @@ proc resolveTypeDesc*(T: NimNode): NimNode =
 
 type InputIdentInfo* = object
   name*: string
+  name_id*: NimNode
   params*: seq[NimNode]
 
 proc `==`*(a, b: InputIdentInfo): bool =
@@ -37,13 +38,17 @@ proc generateGenericBracket*(params: seq[NimNode], id: NimNode): NimNode =
 
 proc parseInputIdentInfo*(node: NimNode): InputIdentInfo =
   case node.kind:
-  of nnkIdent: return InputIdentInfo(name: node.strVal, params: @[])
-  of nnkBracketExpr: return InputIdentInfo(name: node[0].strVal, params: node[1..^1])
+  of nnkIdent: return InputIdentInfo(
+    name: node.strVal,
+    name_id: node,
+    params: @[])
+  of nnkBracketExpr: return InputIdentInfo(name: node[0].strVal, name_id: node[
+      0], params: node[1..^1])
   else: error "invalid ident node"
 
 proc parseFromTypedIdentInfo*(node: NimNode): InputIdentInfo =
   case node.kind:
-  of nnkSym: return InputIdentInfo(name: node.strVal, params: @[])
+  of nnkSym: return InputIdentInfo(name: node.strVal, name_id: node, params: @[])
   of nnkBracketExpr:
     var params = newSeq[NimNode]()
     for it in node[1..^1]:
@@ -51,7 +56,10 @@ proc parseFromTypedIdentInfo*(node: NimNode): InputIdentInfo =
         it,
         it.resolveTypeDesc.getType
       )
-    return InputIdentInfo(name: node[0].strVal, params: params)
+    return InputIdentInfo(
+      name: node[0].strVal,
+      name_id: node[0],
+      params: params)
   else: error "invalid ident node"
 
 proc definedIdentInfo*(node: NimNode): tuple[value: string, exported: bool] =
@@ -101,13 +109,16 @@ proc vtType*(T: NimNode): NimNode {.compileTime.} =
   impl.expectKind nnkObjectTy
   return impl[2][0][1][0]
 
-proc vtDefinition*(impl: NimNode): OrderedTable[string, tuple[sym: NimNode, optional: bool]] {.compileTime.} =
+proc vtDefinition*(impl: NimNode):
+  OrderedTable[string, tuple[sym: NimNode, optional: bool]] {.compileTime.} =
   impl.expectKind nnkObjectTy
   for item in impl[2]:
     item.expectKind nnkIdentDefs
     item.expectLen 3
     item[0].expectKind nnkSym
-    result[item[0].strVal] = (sym: item[0], optional: (item[1].kind == nnkBracketExpr))
+    result[item[0].strVal] = (
+      sym: item[0],
+      optional: (item[1].kind == nnkBracketExpr))
 
 proc concatParams*(a, b: seq[NimNode]): seq[NimNode] =
   result = newSeq[NimNode]()

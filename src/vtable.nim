@@ -80,7 +80,8 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
       newEmptyNode(),
       newEmptyNode(),
     )
-    let basechain = newDotExpr(newDotExpr(selfsym, ident "vtbl"), ident mid.value)
+    let basechain = newDotExpr(
+      newDotExpr(selfsym, ident "vtbl"), ident mid.value)
     if hasDefault:
       var vfnbodycall = newNimNode nnkCall
       vfnbodycall.add newCall(
@@ -98,9 +99,7 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
           newCall(
             newDotExpr(
               basechain,
-              bindSym "isSome"
-            )
-          ),
+              bindSym("isSome"))),
           newStmtList(vfnbodycall)
         ),
         nnkElse.newTree(velbody)
@@ -126,7 +125,7 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
     )
   )
   typesec.add nnkTypeDef.newTree(
-    ident namestr,
+    nameidinfo.name_id,
     namegen,
     nnkBracketExpr.newTree(
       bindSym "Interface",
@@ -136,7 +135,10 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
   result.add typesec
   result.add defs
 
-macro impl*(clazz: typed{nkSym | nkBracketExpr}, iface: typed{nkSym | nkBracketExpr}, body: untyped{nkStmtList}) =
+macro impl*(
+  clazz: typed{nkSym | nkBracketExpr},
+  iface: typed{nkSym | nkBracketExpr},
+  body: untyped{nkStmtList}) =
   let clazzinfo = clazz.parseFromTypedIdentInfo
   let ifaceinfo = iface.parseFromTypedIdentInfo
   let namestr = clazzinfo.name
@@ -197,7 +199,11 @@ macro impl*(clazz: typed{nkSym | nkBracketExpr}, iface: typed{nkSym | nkBracketE
   fblock.add quote do:
     once:
       `onceblock`
-  let retype = if ifaceinfo.params.len == 0 or ifaceinfo.params == clazzinfo.params: nnkConverterDef else: nnkProcDef
+  let retype =
+    if ifaceinfo.params.len == 0 or ifaceinfo.params == clazzinfo.params:
+      nnkConverterDef
+    else:
+      nnkProcDef
   result = retype.newTree(
     nnkPostfix.newTree(
       ident "*",
