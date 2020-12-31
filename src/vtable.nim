@@ -113,6 +113,14 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
       vfn.add newStmtList(vfnbodycall)
     defs.add vfn
   typesec.add nnkTypeDef.newTree(
+    nameidinfo.name_id,
+    namegen,
+    nnkBracketExpr.newTree(
+      bindSym "Interface",
+      nameidinfo.params.generateGenericBracket vt_id
+    )
+  )
+  typesec.add nnkTypeDef.newTree(
     nnkPragmaExpr.newTree(
       vt_id,
       nnkPragma.newTree(ident "pure")
@@ -122,14 +130,6 @@ macro trait*(name: untyped{nkIdent | nkBracketExpr}, body: untyped{nkStmtList}) 
       newEmptyNode(),
       newEmptyNode(),
       vtds
-    )
-  )
-  typesec.add nnkTypeDef.newTree(
-    nameidinfo.name_id,
-    namegen,
-    nnkBracketExpr.newTree(
-      bindSym "Interface",
-      nameidinfo.params.generateGenericBracket vt_id
     )
   )
   result.add typesec
